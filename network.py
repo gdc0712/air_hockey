@@ -5,6 +5,7 @@ Host-authoritative model over TCP with length-prefixed JSON messages.
 import json
 import socket
 import struct
+import subprocess
 import threading
 import queue
 
@@ -51,8 +52,35 @@ def _recv_exact(sock, n):
     return bytes(data)
 
 
+def _is_wsl():
+    """Check if running inside WSL."""
+    try:
+        with open("/proc/version", "r") as f:
+            return "microsoft" in f.read().lower()
+    except OSError:
+        return False
+
+
 def get_local_ip():
-    """Return this machine's LAN IP address."""
+    """Return this machine's LAN IP address.
+
+    On WSL2 the normal socket trick returns the virtual adapter IP which
+    isn't reachable from other machines on the network.  When WSL is
+    detected, ask Windows for the LAN IP via powershell.exe instead.
+    """
+    if _is_wsl():
+        try:
+            out = subprocess.check_output(
+                ["powershell.exe", "-Command",
+                 "(Get-NetRoute -DestinationPrefix '0.0.0.0/0' "
+                 "| Sort-Object RouteMetric | Select-Object -First 1 "
+                 "| Get-NetIPAddress -AddressFamily IPv4).IPAddress"],
+                timeout=5, text=True,
+            ).strip()
+            if out:
+                return out
+        except Exception:
+            pass
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
