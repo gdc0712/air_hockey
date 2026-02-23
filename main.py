@@ -269,20 +269,11 @@ class Game:
     def _get_p1_input(self, keys):
         """Get Player 1 input (bottom paddle). Returns (ax, ay, boost)."""
         if self.mouse_mode:
-            mx, my = pygame.mouse.get_pos()
-            # Move toward mouse position
-            dx = mx - self.paddle1.x
-            dy = my - self.paddle1.y
-            dist = math.hypot(dx, dy)
-            if dist > 5:
-                ax = dx / dist
-                ay = dy / dist
-            else:
-                ax, ay = 0, 0
-            boost = pygame.mouse.get_pressed()[0]  # left click = boost
-            return ax, ay, boost
+            # Mouse mode returns None to signal direct tracking in update()
+            return None, None, pygame.mouse.get_pressed()[0]
 
         ax, ay = 0.0, 0.0
+        # WASD always works
         if keys[pygame.K_a]:
             ax -= 1
         if keys[pygame.K_d]:
@@ -291,6 +282,16 @@ class Game:
             ay -= 1
         if keys[pygame.K_s]:
             ay += 1
+        # Arrow keys also work when not in local 1v1 (where P2 needs them)
+        if self.game_mode != "local_1v1":
+            if keys[pygame.K_LEFT]:
+                ax -= 1
+            if keys[pygame.K_RIGHT]:
+                ax += 1
+            if keys[pygame.K_UP]:
+                ay -= 1
+            if keys[pygame.K_DOWN]:
+                ay += 1
         # Normalize diagonal
         mag = math.hypot(ax, ay)
         if mag > 1:
@@ -316,6 +317,27 @@ class Game:
             ay /= mag
         boost = keys[pygame.K_RSHIFT]
         return ax, ay, boost
+
+    def _update_paddle_mouse(self, paddle, dt):
+        """Move paddle directly toward mouse for responsive tracking."""
+        old_x, old_y = paddle.x, paddle.y
+
+        # Let normal update handle effects, freeze, boost (no directional input)
+        paddle.update(dt, 0, 0)
+
+        if paddle.frozen:
+            return
+
+        # Override position: track mouse directly
+        mx, my = pygame.mouse.get_pos()
+        paddle.x = mx
+        paddle.y = my
+        paddle._clamp_position()
+
+        # Set velocity from actual movement so puck collisions feel right
+        if dt > 0:
+            paddle.vx = (paddle.x - old_x) / dt
+            paddle.vy = (paddle.y - old_y) / dt
 
     # ── Update ───────────────────────────────────────────────────────
 
@@ -344,7 +366,11 @@ class Game:
         # Player 1 input
         ax1, ay1, boost1 = self._get_p1_input(keys)
         self.paddle1.boosting = boost1
-        self.paddle1.update(dt, ax1, ay1)
+        if ax1 is None:
+            # Mouse mode: direct position tracking for responsiveness
+            self._update_paddle_mouse(self.paddle1, dt)
+        else:
+            self.paddle1.update(dt, ax1, ay1)
 
         # Player 2 / AI input
         if self.paddle2:
