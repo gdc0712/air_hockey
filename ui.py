@@ -100,24 +100,28 @@ class MainMenu:
         self.title_font = pygame.font.SysFont(None, 64)
         self.sub_font = pygame.font.SysFont(None, 28)
 
+        # Game mode buttons – horizontal row at y=175
+        btn_w, btn_h, gap = 200, 44, 20
+        total_w = btn_w * 3 + gap * 2
+        x_start = (SCREEN_WIDTH - total_w) // 2 + btn_w // 2
         self.buttons = {
-            "local_1v1": Button(cx, 200, 260, 44, "Local 1v1"),
-            "vs_ai": Button(cx, 260, 260, 44, "Player vs AI"),
-            "practice": Button(cx, 320, 260, 44, "Practice"),
-            "quit": Button(cx, 520, 200, 40, "Quit", color=(100, 30, 30)),
+            "local_1v1": Button(x_start, 175, btn_w, btn_h, "Local 1v1"),
+            "vs_ai": Button(x_start + btn_w + gap, 175, btn_w, btn_h, "Player vs AI"),
+            "practice": Button(x_start + 2 * (btn_w + gap), 175, btn_w, btn_h, "Practice"),
+            "quit": Button(cx, 530, 200, 40, "Quit", color=(100, 30, 30)),
         }
 
         # Settings selectors
-        self.difficulty_sel = Selector(cx, 400, "AI Difficulty",
-                                       ["Easy", "Medium", "Hard"], default_index=1)
-        self.arena_sel = Selector(cx, 460, "Arena",
-                                   list(ARENAS.keys()), default_index=0)
-        self.rules_sel = Selector(cx - 150, 400, "Match Rules",
+        self.rules_sel = Selector(cx, 260, "Match Rules",
                                    ["First to 5", "First to 7", "First to 10",
                                     "Timed 60s", "Timed 90s", "Timed 120s"],
-                                   default_index=1, width=200)
-        self.mouse_toggle = Button(cx + 180, 400, 160, 30, "Mouse: OFF",
-                                   font_size=20)
+                                   default_index=1, width=280)
+        # Arena (left) and AI Difficulty (right) side by side at y=330
+        self.arena_sel = Selector(cx - 170, 330, "Arena",
+                                   list(ARENAS.keys()), default_index=0)
+        self.difficulty_sel = Selector(cx + 170, 330, "AI Difficulty",
+                                       ["Easy", "Medium", "Hard"], default_index=1)
+        self.mouse_toggle = Button(cx, 400, 180, 32, "Mouse: OFF", font_size=22)
         self.mouse_mode = False
 
     def handle_event(self, event):
@@ -165,20 +169,24 @@ class MainMenu:
 
     def draw(self, surface):
         surface.fill((20, 20, 30))
+        cx = SCREEN_WIDTH // 2
 
         # Title
         title = self.title_font.render("AIR HOCKEY", True, WHITE)
-        surface.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, 60))
+        surface.blit(title, (cx - title.get_width() // 2, 50))
 
         sub = self.sub_font.render("Select a game mode", True, GRAY)
-        surface.blit(sub, (SCREEN_WIDTH // 2 - sub.get_width() // 2, 130))
+        surface.blit(sub, (cx - sub.get_width() // 2, 120))
 
         for btn in self.buttons.values():
             btn.draw(surface)
 
-        self.difficulty_sel.draw(surface)
-        self.arena_sel.draw(surface)
+        # Divider line between game modes and settings
+        pygame.draw.line(surface, GRAY, (cx - 250, 220), (cx + 250, 220), 1)
+
         self.rules_sel.draw(surface)
+        self.arena_sel.draw(surface)
+        self.difficulty_sel.draw(surface)
         self.mouse_toggle.draw(surface)
 
         # Arena description
@@ -186,7 +194,7 @@ class MainMenu:
         if arena_key in ARENAS:
             desc = ARENAS[arena_key].get("description", "")
             desc_surf = self.sub_font.render(desc, True, LIGHT_GRAY)
-            surface.blit(desc_surf, (SCREEN_WIDTH // 2 - desc_surf.get_width() // 2, 490))
+            surface.blit(desc_surf, (cx - desc_surf.get_width() // 2, 430))
 
 
 class PauseMenu:
