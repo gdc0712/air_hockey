@@ -28,6 +28,7 @@ from settings import (
     DEFAULT_GOALS_TO_WIN, DEFAULT_MATCH_TIME,
     SOUND_ENABLED, SOUND_SAMPLE_RATE, SOUND_VOLUME,
     PADDLE_FRICTION, PADDLE_MAX_SPEED,
+    NETWORK_PORT,
 )
 from entities import Paddle, Puck, PowerUp, ParticleSystem
 from ai import AIController
@@ -969,12 +970,21 @@ class Game:
         elif self.state == self.STATE_ONLINE_CLIENT_LOBBY:
             result = self.join_lobby.handle_event(event)
             if result == "connect" and not self.join_lobby.connecting:
-                ip = self.join_lobby.ip_input.strip()
-                if ip:
+                raw = self.join_lobby.ip_input.strip()
+                if raw:
+                    # Parse optional port from "ip:port" format
+                    if ":" in raw:
+                        ip, port_str = raw.rsplit(":", 1)
+                        try:
+                            port = int(port_str)
+                        except ValueError:
+                            port = NETWORK_PORT
+                    else:
+                        ip, port = raw, NETWORK_PORT
                     self.join_lobby.connecting = True
                     self.join_lobby.set_status("Connecting...", (140, 140, 140))
                     self.client = GameClient()
-                    ok, err = self.client.connect(ip)
+                    ok, err = self.client.connect(ip, port)
                     if ok:
                         self.join_lobby.connected = True
                         self.join_lobby.connecting = False

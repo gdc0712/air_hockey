@@ -523,7 +523,7 @@ class JoinLobby:
                 return "connect"
             elif event.key == pygame.K_BACKSPACE:
                 self.ip_input = self.ip_input[:-1]
-            elif event.unicode in "0123456789.":
+            elif event.unicode in "0123456789.:":
                 if len(self.ip_input) < 21:  # max IP:port length
                     self.ip_input += event.unicode
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
