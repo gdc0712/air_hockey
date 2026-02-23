@@ -11,6 +11,7 @@ from settings import (
     POWERUP_COLORS, POWERUP_DURATION,
     PU_BIGGER, PU_SMALLER, PU_SPEED, PU_MAGNET, PU_FREEZE,
     ARENAS,
+    NETWORK_PORT,
 )
 
 
@@ -101,13 +102,15 @@ class MainMenu:
         self.sub_font = pygame.font.SysFont(None, 28)
 
         # Game mode buttons – horizontal row at y=175
-        btn_w, btn_h, gap = 200, 44, 20
-        total_w = btn_w * 3 + gap * 2
+        btn_w, btn_h, gap = 155, 44, 15
+        total_w = btn_w * 4 + gap * 3
         x_start = (SCREEN_WIDTH - total_w) // 2 + btn_w // 2
         self.buttons = {
             "local_1v1": Button(x_start, 175, btn_w, btn_h, "Local 1v1"),
-            "vs_ai": Button(x_start + btn_w + gap, 175, btn_w, btn_h, "Player vs AI"),
+            "vs_ai": Button(x_start + btn_w + gap, 175, btn_w, btn_h, "vs AI"),
             "practice": Button(x_start + 2 * (btn_w + gap), 175, btn_w, btn_h, "Practice"),
+            "online": Button(x_start + 3 * (btn_w + gap), 175, btn_w, btn_h, "Online",
+                             color=(30, 80, 30), hover_color=(50, 120, 50)),
             "quit": Button(cx, 530, 200, 40, "Quit", color=(100, 30, 30)),
         }
 
@@ -370,3 +373,194 @@ class HUD:
                 f"{effect_names.get(eff, '?')} {remaining:.1f}s", True, color)
             surface.blit(text, (x - 16 - text.get_width() - 4, ey))
             offset += 1
+
+
+# ── Online Multiplayer UI ────────────────────────────────────────────
+
+class OnlineMenu:
+    """Host / Join / Back selection screen."""
+
+    def __init__(self):
+        cx = SCREEN_WIDTH // 2
+        cy = SCREEN_HEIGHT // 2
+        self.title_font = pygame.font.SysFont(None, 52)
+        self.buttons = {
+            "host": Button(cx, cy - 40, 260, 50, "Host Game",
+                           color=(30, 80, 30), hover_color=(50, 120, 50)),
+            "join": Button(cx, cy + 30, 260, 50, "Join Game",
+                           color=(30, 50, 100), hover_color=(50, 80, 150)),
+            "back": Button(cx, cy + 110, 200, 40, "Back"),
+        }
+
+    def handle_event(self, event):
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            for name, btn in self.buttons.items():
+                if btn.is_clicked(event.pos, True):
+                    return name
+        return None
+
+    def update(self, mouse_pos):
+        for btn in self.buttons.values():
+            btn.update(mouse_pos)
+
+    def draw(self, surface):
+        surface.fill((20, 20, 30))
+        cx = SCREEN_WIDTH // 2
+        title = self.title_font.render("ONLINE PLAY", True, WHITE)
+        surface.blit(title, (cx - title.get_width() // 2, 100))
+        for btn in self.buttons.values():
+            btn.draw(surface)
+
+
+class HostLobby:
+    """Host waiting screen: shows LAN IP, waiting status, start/cancel buttons."""
+
+    def __init__(self):
+        cx = SCREEN_WIDTH // 2
+        cy = SCREEN_HEIGHT // 2
+        self.title_font = pygame.font.SysFont(None, 48)
+        self.info_font = pygame.font.SysFont(None, 32)
+        self.status_font = pygame.font.SysFont(None, 28)
+        self.ip_text = ""
+        self.status = "Waiting for player..."
+        self.status_color = GRAY
+        self.client_connected = False
+        self.error = None
+        self.buttons = {
+            "cancel": Button(cx - 80, cy + 120, 140, 40, "Cancel"),
+        }
+        self.start_button = Button(cx + 80, cy + 120, 140, 40, "Start",
+                                   color=(30, 80, 30), hover_color=(50, 120, 50))
+
+    def set_ip(self, ip):
+        self.ip_text = f"{ip}:{NETWORK_PORT}"
+
+    def set_client_connected(self, connected):
+        self.client_connected = connected
+        if connected:
+            self.status = "Player connected!"
+            self.status_color = GREEN
+
+    def set_error(self, msg):
+        self.error = msg
+        self.status = f"Error: {msg}"
+        self.status_color = RED
+
+    def handle_event(self, event):
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            for name, btn in self.buttons.items():
+                if btn.is_clicked(event.pos, True):
+                    return name
+            if self.client_connected and self.start_button.is_clicked(event.pos, True):
+                return "start"
+        return None
+
+    def update(self, mouse_pos):
+        for btn in self.buttons.values():
+            btn.update(mouse_pos)
+        if self.client_connected:
+            self.start_button.update(mouse_pos)
+
+    def draw(self, surface):
+        surface.fill((20, 20, 30))
+        cx = SCREEN_WIDTH // 2
+        cy = SCREEN_HEIGHT // 2
+
+        title = self.title_font.render("HOST GAME", True, WHITE)
+        surface.blit(title, (cx - title.get_width() // 2, 80))
+
+        ip_label = self.info_font.render("Your LAN Address:", True, LIGHT_GRAY)
+        surface.blit(ip_label, (cx - ip_label.get_width() // 2, cy - 80))
+
+        ip_val = self.title_font.render(self.ip_text, True, YELLOW)
+        surface.blit(ip_val, (cx - ip_val.get_width() // 2, cy - 45))
+
+        status = self.status_font.render(self.status, True, self.status_color)
+        surface.blit(status, (cx - status.get_width() // 2, cy + 20))
+
+        for btn in self.buttons.values():
+            btn.draw(surface)
+        if self.client_connected:
+            self.start_button.draw(surface)
+
+
+class JoinLobby:
+    """Client join screen: IP text input, connect button, status."""
+
+    def __init__(self):
+        cx = SCREEN_WIDTH // 2
+        cy = SCREEN_HEIGHT // 2
+        self.title_font = pygame.font.SysFont(None, 48)
+        self.info_font = pygame.font.SysFont(None, 32)
+        self.input_font = pygame.font.SysFont(None, 36)
+        self.status_font = pygame.font.SysFont(None, 28)
+        self.ip_input = ""
+        self.status = ""
+        self.status_color = GRAY
+        self.connected = False
+        self.connecting = False
+        self.input_rect = pygame.Rect(cx - 140, cy - 30, 280, 44)
+        self.buttons = {
+            "connect": Button(cx, cy + 40, 200, 40, "Connect",
+                              color=(30, 50, 100), hover_color=(50, 80, 150)),
+            "cancel": Button(cx, cy + 120, 200, 40, "Cancel"),
+        }
+
+    def reset(self):
+        self.ip_input = ""
+        self.status = ""
+        self.status_color = GRAY
+        self.connected = False
+        self.connecting = False
+
+    def set_status(self, msg, color=GRAY):
+        self.status = msg
+        self.status_color = color
+
+    def handle_event(self, event):
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_RETURN and self.ip_input and not self.connecting:
+                return "connect"
+            elif event.key == pygame.K_BACKSPACE:
+                self.ip_input = self.ip_input[:-1]
+            elif event.unicode in "0123456789.":
+                if len(self.ip_input) < 21:  # max IP:port length
+                    self.ip_input += event.unicode
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            for name, btn in self.buttons.items():
+                if btn.is_clicked(event.pos, True):
+                    return name
+        return None
+
+    def update(self, mouse_pos):
+        for btn in self.buttons.values():
+            btn.update(mouse_pos)
+
+    def draw(self, surface):
+        surface.fill((20, 20, 30))
+        cx = SCREEN_WIDTH // 2
+        cy = SCREEN_HEIGHT // 2
+
+        title = self.title_font.render("JOIN GAME", True, WHITE)
+        surface.blit(title, (cx - title.get_width() // 2, 80))
+
+        label = self.info_font.render("Enter Host IP:", True, LIGHT_GRAY)
+        surface.blit(label, (cx - label.get_width() // 2, cy - 80))
+
+        # Text input box
+        border_color = CYAN if not self.connected else GREEN
+        pygame.draw.rect(surface, DARK_GRAY, self.input_rect, border_radius=6)
+        pygame.draw.rect(surface, border_color, self.input_rect, 2, border_radius=6)
+        # Render text with cursor
+        display_text = self.ip_input + ("|" if not self.connected else "")
+        text_surf = self.input_font.render(display_text, True, WHITE)
+        surface.blit(text_surf, (self.input_rect.x + 10,
+                                 self.input_rect.y + self.input_rect.height // 2
+                                 - text_surf.get_height() // 2))
+
+        if self.status:
+            status = self.status_font.render(self.status, True, self.status_color)
+            surface.blit(status, (cx - status.get_width() // 2, cy + 80))
+
+        for btn in self.buttons.values():
+            btn.draw(surface)

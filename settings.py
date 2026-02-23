@@ -195,6 +195,10 @@ POWERUP_COLORS = {
     PU_FREEZE: (150, 200, 255),
 }
 
+# ── Network (LAN Multiplayer) ────────────────────────────────────────
+NETWORK_PORT = 5555
+NETWORK_VERSION = 1
+
 # ── Sound ────────────────────────────────────────────────────────────
 SOUND_ENABLED = True
 SOUND_SAMPLE_RATE = 22050

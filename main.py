@@ -31,7 +31,8 @@ from settings import (
 )
 from entities import Paddle, Puck, PowerUp, ParticleSystem
 from ai import AIController
-from ui import MainMenu, PauseMenu, EndScreen, HUD
+from ui import MainMenu, PauseMenu, EndScreen, HUD, OnlineMenu, HostLobby, JoinLobby
+from network import GameServer, GameClient, get_local_ip
 
 
 # ── Procedural Sound Generation ─────────────────────────────────────
@@ -75,6 +76,9 @@ class Game:
     STATE_GOAL = "goal"      # brief pause after goal
     STATE_COUNTDOWN = "countdown"
     STATE_END = "end"
+    STATE_ONLINE_MENU = "online_menu"
+    STATE_ONLINE_HOST_LOBBY = "online_host_lobby"
+    STATE_ONLINE_CLIENT_LOBBY = "online_client_lobby"
 
     def __init__(self):
         pygame.init()
@@ -96,10 +100,19 @@ class Game:
         self.pause_menu = PauseMenu()
         self.end_screen = EndScreen()
         self.hud = HUD()
+        self.online_menu = OnlineMenu()
+        self.host_lobby = HostLobby()
+        self.join_lobby = JoinLobby()
 
         # Game state
         self.state = self.STATE_MENU
-        self.game_mode = None  # "local_1v1", "vs_ai", "practice"
+        self.game_mode = None  # "local_1v1", "vs_ai", "practice", "online"
+
+        # Network
+        self.network_role = None  # None, "host", "client"
+        self.server = None
+        self.client = None
+        self.client_input = None  # latest input from remote client
         self.match_mode = "first_to"
         self.match_param = DEFAULT_GOALS_TO_WIN
         self.arena_key = "classic"
@@ -252,14 +265,27 @@ class Game:
     def _end_match(self):
         """Transition to end screen."""
         if self.score_p1 > self.score_p2:
-            winner = "Player 1"
+            if self.game_mode == "online" and self.network_role == "client":
+                winner = "Host"
+            else:
+                winner = "Player 1"
         elif self.score_p2 > self.score_p1:
             if self.game_mode == "vs_ai":
                 winner = "AI"
+            elif self.game_mode == "online" and self.network_role == "host":
+                winner = "Opponent"
+            elif self.game_mode == "online" and self.network_role == "client":
+                winner = "You"
             else:
                 winner = "Player 2"
         else:
             winner = "Draw"
+
+        if self.game_mode == "online" and self.network_role == "host":
+            if self.score_p1 > self.score_p2:
+                winner = "You"
+            elif self.score_p2 > self.score_p1:
+                winner = "Opponent"
 
         self.end_screen.set_result(winner, self.score_p1, self.score_p2)
         self.state = self.STATE_END
@@ -339,9 +365,186 @@ class Game:
             paddle.vx = (paddle.x - old_x) / dt
             paddle.vy = (paddle.y - old_y) / dt
 
+    # ── Network ──────────────────────────────────────────────────────
+
+    def _start_hosting(self):
+        """Transition to host lobby."""
+        self.network_role = "host"
+        self.server = GameServer()
+        ok, err = self.server.start()
+        self.host_lobby.client_connected = False
+        self.host_lobby.error = None
+        self.host_lobby.status = "Waiting for player..."
+        self.host_lobby.status_color = (140, 140, 140)
+        if ok:
+            self.host_lobby.set_ip(get_local_ip())
+            self.state = self.STATE_ONLINE_HOST_LOBBY
+        else:
+            self.host_lobby.set_ip(get_local_ip())
+            self.host_lobby.set_error(err)
+            self.state = self.STATE_ONLINE_HOST_LOBBY
+
+    def _start_joining(self):
+        """Transition to join lobby."""
+        self.network_role = "client"
+        self.join_lobby.reset()
+        self.state = self.STATE_ONLINE_CLIENT_LOBBY
+
+    def _cleanup_network(self):
+        """Shut down any active network connections."""
+        if self.server:
+            self.server.stop()
+            self.server = None
+        if self.client:
+            self.client.disconnect()
+            self.client = None
+        self.network_role = None
+        self.client_input = None
+
+    def _build_state_snapshot(self):
+        """Serialize full game state for sending to client."""
+        snap = {
+            "p1x": self.paddle1.x, "p1y": self.paddle1.y,
+            "p1vx": self.paddle1.vx, "p1vy": self.paddle1.vy,
+            "p1r": self.paddle1.radius, "p1boost": self.paddle1.boost_energy,
+            "p1frozen": self.paddle1.frozen,
+            "p1effects": {k: round(v, 2) for k, v in self.paddle1.effects.items()},
+        }
+        if self.paddle2:
+            snap.update({
+                "p2x": self.paddle2.x, "p2y": self.paddle2.y,
+                "p2vx": self.paddle2.vx, "p2vy": self.paddle2.vy,
+                "p2r": self.paddle2.radius, "p2boost": self.paddle2.boost_energy,
+                "p2frozen": self.paddle2.frozen,
+                "p2effects": {k: round(v, 2) for k, v in self.paddle2.effects.items()},
+            })
+        snap.update({
+            "px": self.puck.x, "py": self.puck.y,
+            "pvx": self.puck.vx, "pvy": self.puck.vy,
+            "pactive": self.puck.active,
+            "s1": self.score_p1, "s2": self.score_p2,
+            "mt": round(self.match_timer, 2),
+            "st": self.state,
+            "gt": round(self.goal_timer, 2),
+            "ct": round(self.countdown_timer, 2),
+        })
+        if self.powerup:
+            snap["pu"] = {"t": self.powerup.type, "x": self.powerup.x, "y": self.powerup.y}
+        return snap
+
+    def _apply_state_snapshot(self, snap):
+        """Client-side: unpack state snapshot onto local entities."""
+        if not self.paddle1 or not self.paddle2 or not self.puck:
+            return
+
+        self.paddle1.x = snap["p1x"]
+        self.paddle1.y = snap["p1y"]
+        self.paddle1.vx = snap["p1vx"]
+        self.paddle1.vy = snap["p1vy"]
+        self.paddle1.radius = snap["p1r"]
+        self.paddle1.boost_energy = snap["p1boost"]
+        self.paddle1.frozen = snap["p1frozen"]
+        self.paddle1.effects = snap.get("p1effects", {})
+
+        self.paddle2.x = snap["p2x"]
+        self.paddle2.y = snap["p2y"]
+        self.paddle2.vx = snap["p2vx"]
+        self.paddle2.vy = snap["p2vy"]
+        self.paddle2.radius = snap["p2r"]
+        self.paddle2.boost_energy = snap["p2boost"]
+        self.paddle2.frozen = snap["p2frozen"]
+        self.paddle2.effects = snap.get("p2effects", {})
+
+        self.puck.x = snap["px"]
+        self.puck.y = snap["py"]
+        self.puck.vx = snap["pvx"]
+        self.puck.vy = snap["pvy"]
+        self.puck.active = snap["pactive"]
+
+        # Detect goals for local sound/particles
+        old_s1, old_s2 = self.score_p1, self.score_p2
+        self.score_p1 = snap["s1"]
+        self.score_p2 = snap["s2"]
+        if self.score_p1 > old_s1:
+            self._play_sound("goal")
+            self.particles.emit(self.puck.x, self.puck.y, PARTICLE_COUNT_GOAL,
+                                color=PLAYER1_COLOR, speed_range=(100, 400))
+        elif self.score_p2 > old_s2:
+            self._play_sound("goal")
+            self.particles.emit(self.puck.x, self.puck.y, PARTICLE_COUNT_GOAL,
+                                color=PLAYER2_COLOR, speed_range=(100, 400))
+
+        self.match_timer = snap["mt"]
+        self.goal_timer = snap["gt"]
+        self.countdown_timer = snap["ct"]
+
+        # State transitions
+        new_state = snap["st"]
+        if new_state == self.STATE_END and self.state != self.STATE_END:
+            self._end_match()
+        elif new_state in (self.STATE_PLAYING, self.STATE_COUNTDOWN,
+                           self.STATE_GOAL, self.STATE_PAUSED):
+            self.state = new_state
+
+        # Power-up
+        if "pu" in snap:
+            pu = snap["pu"]
+            if self.powerup is None or self.powerup.type != pu["t"]:
+                self.powerup = PowerUp(pu["t"], pu["x"], pu["y"])
+            else:
+                self.powerup.x = pu["x"]
+                self.powerup.y = pu["y"]
+        else:
+            self.powerup = None
+
+    def _client_update(self, dt):
+        """Client-side update: send input, receive state, update particles."""
+        if not self.client or not self.client.is_connected():
+            self._cleanup_network()
+            self.state = self.STATE_MENU
+            return
+
+        # Send local input to host
+        keys = pygame.key.get_pressed()
+        ax, ay, boost = self._get_p1_input(keys)
+        if ax is None:
+            # Mouse mode: convert mouse position to proportional acceleration
+            mx, my = pygame.mouse.get_pos()
+            if self.paddle2:
+                # Client controls P2 (top paddle)
+                ax = (mx - self.paddle2.x) * 5.0 / PADDLE_MAX_SPEED
+                ay = (my - self.paddle2.y) * 5.0 / PADDLE_MAX_SPEED
+                mag = math.hypot(ax, ay)
+                if mag > 1:
+                    ax /= mag
+                    ay /= mag
+        self.client.send_input(ax, ay, boost)
+
+        # Receive and apply state
+        state = self.client.get_state()
+        if state:
+            self._apply_state_snapshot(state)
+
+        # Check for disconnect message
+        msg = self.client.get_message()
+        if msg and msg.get("type") == "disconnect":
+            self._cleanup_network()
+            self.state = self.STATE_MENU
+            return
+
+        # Update local particles
+        self.particles.update(dt)
+        if self.powerup:
+            self.powerup.update(dt)
+
     # ── Update ───────────────────────────────────────────────────────
 
     def update(self, dt):
+        # Client skips local physics entirely
+        if self.game_mode == "online" and self.network_role == "client":
+            self._client_update(dt)
+            return
+
         if self.state == self.STATE_COUNTDOWN:
             self.countdown_timer -= dt
             if self.countdown_timer <= 0:
@@ -349,6 +552,8 @@ class Game:
                 self.puck.active = True
                 self.puck.launch()
                 self._play_sound("countdown")
+            if self.game_mode == "online" and self.network_role == "host":
+                self.server.send_state(self._build_state_snapshot())
             return
 
         if self.state == self.STATE_GOAL:
@@ -356,6 +561,8 @@ class Game:
             self.particles.update(dt)
             if self.goal_timer <= 0:
                 self._start_countdown()
+            if self.game_mode == "online" and self.network_role == "host":
+                self.server.send_state(self._build_state_snapshot())
             return
 
         if self.state != self.STATE_PLAYING:
@@ -372,12 +579,22 @@ class Game:
         else:
             self.paddle1.update(dt, ax1, ay1)
 
-        # Player 2 / AI input
+        # Player 2 / AI / Remote input
         if self.paddle2:
             if self.game_mode == "vs_ai" and self.ai:
                 ax2, ay2, boost2 = self.ai.update(dt, self.paddle2, self.puck)
                 self.paddle2.boosting = boost2
                 self.paddle2.update(dt, ax2, ay2)
+            elif self.game_mode == "online" and self.network_role == "host":
+                inp = self.server.get_client_input()
+                if inp:
+                    self.client_input = inp
+                if self.client_input:
+                    ax2, ay2, boost2 = self.client_input
+                    self.paddle2.boosting = boost2
+                    self.paddle2.update(dt, ax2, ay2)
+                else:
+                    self.paddle2.update(dt, 0, 0)
             elif self.game_mode == "local_1v1":
                 ax2, ay2, boost2 = self._get_p2_input(keys)
                 self.paddle2.boosting = boost2
@@ -443,6 +660,14 @@ class Game:
         else:
             self.shake_offset = (0, 0)
 
+        # Host: send state to client each frame
+        if self.game_mode == "online" and self.network_role == "host" and self.server:
+            self.server.send_state(self._build_state_snapshot())
+            # Check if client disconnected mid-game
+            if not self.server.is_client_connected():
+                self._cleanup_network()
+                self.state = self.STATE_MENU
+
     def _update_powerups(self, dt):
         """Handle power-up spawning and collection."""
         if self.powerup is None:
@@ -498,6 +723,21 @@ class Game:
             pygame.display.flip()
             return
 
+        if self.state == self.STATE_ONLINE_MENU:
+            self.online_menu.draw(self.screen)
+            pygame.display.flip()
+            return
+
+        if self.state == self.STATE_ONLINE_HOST_LOBBY:
+            self.host_lobby.draw(self.screen)
+            pygame.display.flip()
+            return
+
+        if self.state == self.STATE_ONLINE_CLIENT_LOBBY:
+            self.join_lobby.draw(self.screen)
+            pygame.display.flip()
+            return
+
         # Create game surface (for screen shake offset)
         game_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
         self._draw_arena(game_surface)
@@ -518,7 +758,11 @@ class Game:
         p2_effects = dict(self.paddle2.effects) if self.paddle2 else {}
 
         # Build labels
-        if self.game_mode == "vs_ai":
+        if self.game_mode == "online" and self.network_role == "host":
+            labels = ("You (Host)", "Player 2")
+        elif self.game_mode == "online" and self.network_role == "client":
+            labels = ("Host", "You")
+        elif self.game_mode == "vs_ai":
             labels = ("Player", "AI")
         elif self.game_mode == "local_1v1":
             labels = ("P1", "P2")
@@ -636,6 +880,7 @@ class Game:
 
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
+                    self._cleanup_network()
                     self.running = False
                     break
 
@@ -648,6 +893,31 @@ class Game:
             mouse_pos = pygame.mouse.get_pos()
             if self.state == self.STATE_MENU:
                 self.menu.update(mouse_pos)
+            elif self.state == self.STATE_ONLINE_MENU:
+                self.online_menu.update(mouse_pos)
+            elif self.state == self.STATE_ONLINE_HOST_LOBBY:
+                self.host_lobby.update(mouse_pos)
+                # Poll for client connection
+                if self.server and not self.host_lobby.client_connected:
+                    if self.server.is_client_connected():
+                        self.host_lobby.set_client_connected(True)
+            elif self.state == self.STATE_ONLINE_CLIENT_LOBBY:
+                self.join_lobby.update(mouse_pos)
+                # Poll for start message from host
+                if self.client and self.join_lobby.connected:
+                    msg = self.client.get_message()
+                    if msg:
+                        if msg.get("type") == "start":
+                            settings = msg.get("settings", {})
+                            settings.setdefault("match_mode", "first_to")
+                            settings.setdefault("match_param", DEFAULT_GOALS_TO_WIN)
+                            settings.setdefault("arena", "classic")
+                            settings.setdefault("mouse_mode", self.menu.mouse_mode)
+                            self.start_match("online", settings)
+                        elif msg.get("type") == "disconnect":
+                            self.join_lobby.set_status("Host disconnected", (220, 50, 50))
+                            self.join_lobby.connected = False
+                            self._cleanup_network()
             elif self.state == self.STATE_PAUSED:
                 self.pause_menu.update(mouse_pos)
             elif self.state == self.STATE_END:
@@ -668,13 +938,61 @@ class Game:
             result = self.menu.handle_event(event)
             if result == "quit":
                 self.running = False
+            elif result == "online":
+                self.state = self.STATE_ONLINE_MENU
             elif result in ("local_1v1", "vs_ai", "practice"):
                 settings = self.menu.get_settings()
                 self.start_match(result, settings)
 
+        elif self.state == self.STATE_ONLINE_MENU:
+            result = self.online_menu.handle_event(event)
+            if result == "host":
+                self._start_hosting()
+            elif result == "join":
+                self._start_joining()
+            elif result == "back":
+                self.state = self.STATE_MENU
+
+        elif self.state == self.STATE_ONLINE_HOST_LOBBY:
+            result = self.host_lobby.handle_event(event)
+            if result == "start" and self.host_lobby.client_connected:
+                settings = self.menu.get_settings()
+                self.server.send_message({
+                    "type": "start",
+                    "settings": settings,
+                })
+                self.start_match("online", settings)
+            elif result == "cancel":
+                self._cleanup_network()
+                self.state = self.STATE_ONLINE_MENU
+
+        elif self.state == self.STATE_ONLINE_CLIENT_LOBBY:
+            result = self.join_lobby.handle_event(event)
+            if result == "connect" and not self.join_lobby.connecting:
+                ip = self.join_lobby.ip_input.strip()
+                if ip:
+                    self.join_lobby.connecting = True
+                    self.join_lobby.set_status("Connecting...", (140, 140, 140))
+                    self.client = GameClient()
+                    ok, err = self.client.connect(ip)
+                    if ok:
+                        self.join_lobby.connected = True
+                        self.join_lobby.connecting = False
+                        self.join_lobby.set_status("Connected! Waiting for host to start...",
+                                                   (60, 200, 80))
+                    else:
+                        self.join_lobby.connecting = False
+                        self.join_lobby.set_status(f"Failed: {err}", (220, 50, 50))
+                        self.client = None
+            elif result == "cancel":
+                self._cleanup_network()
+                self.state = self.STATE_ONLINE_MENU
+
         elif self.state == self.STATE_PLAYING:
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                self.state = self.STATE_PAUSED
+                # Only host can pause in online mode
+                if self.game_mode != "online" or self.network_role == "host":
+                    self.state = self.STATE_PAUSED
 
         elif self.state == self.STATE_PAUSED:
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
@@ -683,22 +1001,33 @@ class Game:
             if result == "resume":
                 self.state = self.STATE_PLAYING
             elif result == "restart":
-                settings = self.menu.get_settings()
-                self.start_match(self.game_mode, settings)
+                if self.game_mode == "online":
+                    self._cleanup_network()
+                    self.state = self.STATE_MENU
+                else:
+                    settings = self.menu.get_settings()
+                    self.start_match(self.game_mode, settings)
             elif result == "quit":
+                self._cleanup_network()
                 self.state = self.STATE_MENU
 
         elif self.state == self.STATE_END:
             result = self.end_screen.handle_event(event)
             if result == "replay":
-                settings = self.menu.get_settings()
-                self.start_match(self.game_mode, settings)
+                if self.game_mode == "online":
+                    self._cleanup_network()
+                    self.state = self.STATE_MENU
+                else:
+                    settings = self.menu.get_settings()
+                    self.start_match(self.game_mode, settings)
             elif result == "menu":
+                self._cleanup_network()
                 self.state = self.STATE_MENU
 
         elif self.state == self.STATE_COUNTDOWN:
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                self.state = self.STATE_PAUSED
+                if self.game_mode != "online" or self.network_role == "host":
+                    self.state = self.STATE_PAUSED
 
 
 # ── Entry Point ──────────────────────────────────────────────────────
