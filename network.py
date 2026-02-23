@@ -241,6 +241,7 @@ class GameClient:
             # Wait for welcome
             msg = _recv_msg(sock)
             if msg and msg.get("type") == "welcome":
+                sock.settimeout(None)  # clear connect timeout for recv_loop
                 self._sock = sock
                 self._connected = True
                 self._running = True
