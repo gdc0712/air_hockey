@@ -78,7 +78,12 @@ class Game:
 
     def __init__(self):
         pygame.init()
-        pygame.mixer.init(frequency=SOUND_SAMPLE_RATE, size=-16, channels=2, buffer=512)
+        self.sound_available = False
+        try:
+            pygame.mixer.init(frequency=SOUND_SAMPLE_RATE, size=-16, channels=2, buffer=512)
+            self.sound_available = True
+        except pygame.error:
+            print("Warning: No audio device found. Sound disabled.")
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
         pygame.display.set_caption(WINDOW_TITLE)
         self.clock = pygame.time.Clock()
@@ -128,7 +133,7 @@ class Game:
 
     def _init_sounds(self):
         """Generate procedural sounds."""
-        if not SOUND_ENABLED:
+        if not SOUND_ENABLED or not self.sound_available:
             self.sounds = {}
             return
         self.sounds = {
