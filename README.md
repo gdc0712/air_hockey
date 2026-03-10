@@ -21,8 +21,8 @@ A feature-rich air hockey game built with Python and Pygame. Play locally agains
 ## Installation
 
 ```bash
-git clone https://github.com/gcasey11/air_hockey.git
-cd air_hockey
+python -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
